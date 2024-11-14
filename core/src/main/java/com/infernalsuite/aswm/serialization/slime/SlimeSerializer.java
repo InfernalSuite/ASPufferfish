@@ -12,6 +12,8 @@ import com.infernalsuite.aswm.api.world.SlimeChunk;
 import com.infernalsuite.aswm.api.world.SlimeChunkSection;
 import com.infernalsuite.aswm.api.world.SlimeWorld;
 import com.infernalsuite.aswm.api.world.properties.SlimePropertyMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
@@ -20,6 +22,8 @@ import java.nio.ByteOrder;
 import java.util.*;
 
 public class SlimeSerializer {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(SlimeSerializer.class);
 
     public static byte[] serialize(SlimeWorld world) {
         CompoundTag extraData = world.getExtraData();
@@ -50,34 +54,6 @@ public class SlimeSerializer {
             outStream.writeInt(compressedChunkData.length);
             outStream.writeInt(chunkData.length);
             outStream.write(compressedChunkData);
-
-            // Tile entities
-            List<CompoundTag> tileEntitiesList = new ArrayList<>();
-            for (SlimeChunk chunk : world.getChunkStorage()) {
-                tileEntitiesList.addAll(chunk.getTileEntities());
-            }
-            ListTag<CompoundTag> tileEntitiesNbtList = new ListTag<>("tiles", TagType.TAG_COMPOUND, tileEntitiesList);
-            CompoundTag tileEntitiesCompound = new CompoundTag("", new CompoundMap(Collections.singletonList(tileEntitiesNbtList)));
-            byte[] tileEntitiesData = serializeCompoundTag(tileEntitiesCompound);
-            byte[] compressedTileEntitiesData = Zstd.compress(tileEntitiesData);
-
-            outStream.writeInt(compressedTileEntitiesData.length);
-            outStream.writeInt(tileEntitiesData.length);
-            outStream.write(compressedTileEntitiesData);
-
-            // Entities
-            List<CompoundTag> entitiesList = new ArrayList<>();
-            for (SlimeChunk chunk : world.getChunkStorage()) {
-                entitiesList.addAll(chunk.getEntities());
-            }
-            ListTag<CompoundTag> entitiesNbtList = new ListTag<>("entities", TagType.TAG_COMPOUND, entitiesList);
-            CompoundTag entitiesCompound = new CompoundTag("", new CompoundMap(Collections.singletonList(entitiesNbtList)));
-            byte[] entitiesData = serializeCompoundTag(entitiesCompound);
-            byte[] compressedEntitiesData = Zstd.compress(entitiesData);
-
-            outStream.writeInt(compressedEntitiesData.length);
-            outStream.writeInt(entitiesData.length);
-            outStream.write(compressedEntitiesData);
             
             // Extra Tag
             {
@@ -101,24 +77,15 @@ public class SlimeSerializer {
         ByteArrayOutputStream outByteStream = new ByteArrayOutputStream(16384);
         DataOutputStream outStream = new DataOutputStream(outByteStream);
 
-        List<SlimeChunk> emptyChunks = new ArrayList<>(chunks);
-        for (SlimeChunk chunk : chunks) {
-            if (!ChunkPruner.canBePruned(world, chunk)) {
-                emptyChunks.add(chunk);
-            } else {
-                System.out.println("PRUNED: " + chunk);
-            }
-        }
+        // Prune chunks
+        List<SlimeChunk> chunksToSave = chunks.stream()
+                .filter(chunk -> !ChunkPruner.canBePruned(world, chunk))
+                .toList();
 
-        outStream.writeInt(chunks.size());
-        for (SlimeChunk chunk : emptyChunks) {
+        outStream.writeInt(chunksToSave.size());
+        for (SlimeChunk chunk : chunksToSave) {
             outStream.writeInt(chunk.getX());
             outStream.writeInt(chunk.getZ());
-
-            // Height Maps
-            byte[] heightMaps = serializeCompoundTag(chunk.getHeightMaps());
-            outStream.writeInt(heightMaps.length);
-            outStream.write(heightMaps);
 
             // Chunk sections
             SlimeChunkSection[] sections = Arrays.stream(chunk.getSections()).filter(Objects::nonNull).toList().toArray(new SlimeChunkSection[0]);
@@ -149,6 +116,38 @@ public class SlimeSerializer {
                 byte[] serializedBiomes = serializeCompoundTag(slimeChunkSection.getBiomeTag());
                 outStream.writeInt(serializedBiomes.length);
                 outStream.write(serializedBiomes);
+            }
+
+            // Height Maps
+            byte[] heightMaps = serializeCompoundTag(chunk.getHeightMaps());
+            outStream.writeInt(heightMaps.length);
+            outStream.write(heightMaps);
+
+            // Tile entities
+            ListTag<CompoundTag> tileEntitiesNbtList = new ListTag<>("tileEntities", TagType.TAG_COMPOUND, chunk.getTileEntities());
+            CompoundTag tileEntitiesCompound = new CompoundTag("", new CompoundMap(Collections.singletonList(tileEntitiesNbtList)));
+            byte[] tileEntitiesData = serializeCompoundTag(tileEntitiesCompound);
+
+            outStream.writeInt(tileEntitiesData.length);
+            outStream.write(tileEntitiesData);
+
+            // Entities
+            ListTag<CompoundTag> entitiesNbtList = new ListTag<>("entities", TagType.TAG_COMPOUND, chunk.getEntities());
+            CompoundTag entitiesCompound = new CompoundTag("", new CompoundMap(Collections.singletonList(entitiesNbtList)));
+            byte[] entitiesData = serializeCompoundTag(entitiesCompound);
+
+            outStream.writeInt(entitiesData.length);
+            outStream.write(entitiesData);
+
+            // Extra Tag
+            {
+                if (chunk.getExtraData() == null) {
+                    LOGGER.warn("Chunk at " + chunk.getX() + ", " + chunk.getZ() + " from world " + world.getName() + " has no extra data! When deserialized, this chunk will have an empty extra data tag!");
+                }
+                byte[] extra = serializeCompoundTag(chunk.getExtraData());
+
+                outStream.writeInt(extra.length);
+                outStream.write(extra);
             }
         }
 
